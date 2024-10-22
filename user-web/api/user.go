@@ -6,6 +6,8 @@ import (
 	"goshop_api/user-web/forms"
 	"goshop_api/user-web/global"
 	"goshop_api/user-web/global/response"
+	"goshop_api/user-web/middlewares"
+	"goshop_api/user-web/models"
 	"goshop_api/user-web/proto"
 	"net/http"
 
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
 	"go.uber.org/zap"
@@ -186,7 +189,7 @@ func PasswordLogin(c *gin.Context) {
 			return
 		}
 	} else {
-		// 知识查询到了用户而已，并没有检查密码,
+		// 只是查询到了用户而已，并没有检查密码,
 		if passRsp, pasErr := userSrvClient.CheckPassword(context.Background(), &proto.PasswordCheckInfo{
 			Password:          passwordLoginForm.Password,
 			EncryptedPassword: rsp.Password,
@@ -196,8 +199,32 @@ func PasswordLogin(c *gin.Context) {
 			})
 		} else {
 			if passRsp.Success {
-				c.JSON(http.StatusOK, map[string]string{
-					"msg": "登录成功",
+				// 生成token
+				j := middlewares.NewJWT()
+				claims := models.CustomClaims{
+					ID:          uint(rsp.Id),
+					NickName:    rsp.NickName,
+					AuthorityId: uint(rsp.Role),
+					StandardClaims: jwt.StandardClaims{
+						NotBefore: time.Now().Unix(),               // 前面的生成时间
+						ExpiresAt: time.Now().Unix() + 60*60*24*30, //30天过期
+						Issuer:    "lattiex",                       // 签名机构
+					},
+				}
+
+				token, err := j.CreateToken(claims)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"msg": "生成token失败",
+					})
+					return 
+				}
+
+				c.JSON(http.StatusOK, gin.H{
+					"id": rsp.Id,
+					"nick_name": rsp.NickName,
+					"token": token,
+					"expired_at": (time.Now().Unix() + 60*60*24*30)*1000,
 				})
 			} else {
 				c.JSON(http.StatusBadRequest, map[string]string{
