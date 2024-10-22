@@ -63,6 +63,19 @@ func HandleGrpcErrorToHttp(err error, c *gin.Context) {
 	}
 }
 
+func HandleValidatorError(c *gin.Context, err error) {
+	errs, ok := err.(validator.ValidationErrors)
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{
+			"message": err.Error(),
+		})
+	}
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error": removeTopStruct(errs.Translate(global.Trans)), // Translate 本质上返回的就是一个map[string]string
+	})
+	return
+}
+
 func GetUserList(ctx *gin.Context) {
 
 	// 拨号连接用户grpc服务  这里的 Dial 和 WithInsecure 已弃用
@@ -118,21 +131,79 @@ func GetUserList(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+// 登录的逻辑
 func PasswordLogin(c *gin.Context) {
 	// 表单验证
 	passwordLoginForm := forms.PasswordLoginForm{}
 
+	// 下面的if逻辑再每次做表单验证的时候都会使用到，比较长，可以封装起来
+	// 刚才已经做过类似的操作 就是函数 HandleGrpcErrorToHttp
+	// 把注释去掉就变得很简单了
 	if err := c.ShouldBind(&passwordLoginForm); err != nil {
-		// 把 err 类型转换一下
-		errs, ok := err.(validator.ValidationErrors)
-		if !ok {
-			c.JSON(http.StatusOK, gin.H{
-				"message": err.Error(),
-			})
-		}
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": removeTopStruct(errs.Translate(global.Trans)), // Translate 本质上返回的就是一个map[string]string
-		})
+		// // 把 err 类型转换一下
+		// errs, ok := err.(validator.ValidationErrors)
+		// if !ok {
+		// 	c.JSON(http.StatusOK, gin.H{
+		// 		"message": err.Error(),
+		// 	})
+		// }
+		// c.JSON(http.StatusBadRequest, gin.H{
+		// 	"error": removeTopStruct(errs.Translate(global.Trans)), // Translate 本质上返回的就是一个map[string]string
+		// })
+		HandleValidatorError(c, err)
 		return
+	}
+
+	// 拨号连接用户grpc服务  这里的 Dial 和 WithInsecure 已弃用
+	// userConn, err := grpc.Dial(fmt.Sprintf("%s:%d", ip, port), grpc.WithInsecure())
+
+	userConn, err := grpc.NewClient(fmt.Sprintf("%s:%d", global.ServerConfig.UserSrvInfo.Host,
+		global.ServerConfig.UserSrvInfo.Port), grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	if err != nil {
+		zap.S().Errorw("[GetUserList] 连接 【用户服务器失败】",
+			"msg", err.Error())
+	}
+
+	// 生成grpc的client并调用接口
+	userSrvClient := proto.NewUserClient(userConn)
+
+	// 登录的逻辑，前面是判断，检验
+	if rsp, err := userSrvClient.GetUserByMobile(context.Background(), &proto.MobileRequest{
+		Mobile: passwordLoginForm.Mobile,
+	}); err != nil {
+		if e, ok := status.FromError(err); ok {
+			switch e.Code() {
+			case codes.NotFound:
+				c.JSON(http.StatusBadRequest, map[string]string{
+					"mobile": "用户不存在",
+				})
+			default:
+				c.JSON(http.StatusInternalServerError, map[string]string{
+					"mobile": "登录失败",
+				})
+			}
+			return
+		}
+	} else {
+		// 知识查询到了用户而已，并没有检查密码,
+		if passRsp, pasErr := userSrvClient.CheckPassword(context.Background(), &proto.PasswordCheckInfo{
+			Password:          passwordLoginForm.Password,
+			EncryptedPassword: rsp.Password,
+		}); pasErr != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{
+				"msg": "登录失败",
+			})
+		} else {
+			if passRsp.Success {
+				c.JSON(http.StatusOK, map[string]string{
+					"msg": "登录成功",
+				})
+			} else {
+				c.JSON(http.StatusBadRequest, map[string]string{
+					"msg": "登陆失败",
+				})
+			}
+		}
 	}
 }
