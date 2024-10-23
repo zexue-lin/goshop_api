@@ -19,9 +19,9 @@ func InitConfig() {
 	debug := GetEnvInfo("GOSHOP_DEBUG")
 
 	configFilePrefix := "config" // 自定义文件前缀
-	configFileName := fmt.Sprintf("../%s-pro.yaml", configFilePrefix)
+	configFileName := fmt.Sprintf("user-web/%s-pro.yaml", configFilePrefix)
 	if debug {
-		configFileName = fmt.Sprintf("../%s-debug.yaml", configFilePrefix)
+		configFileName = fmt.Sprintf("user-web/%s-debug.yaml", configFilePrefix)
 	}
 	v := viper.New()
 
@@ -41,7 +41,7 @@ func InitConfig() {
 	// viper的功能 - 动态监控变化
 	v.WatchConfig()
 	v.OnConfigChange(func(e fsnotify.Event) {
-		zap.S().Infof("配置文件产生变化:%s",e.Name)
+		zap.S().Infof("配置文件产生变化:%s", e.Name)
 		_ = v.ReadInConfig()
 		_ = v.Unmarshal(&global.ServerConfig)
 

@@ -81,6 +81,7 @@ func HandleValidatorError(c *gin.Context, err error) {
 
 func GetUserList(ctx *gin.Context) {
 
+	// 跨域的问题-可以前端解决-也可以后端解决---这里用后端方法解决
 	// 拨号连接用户grpc服务  这里的 Dial 和 WithInsecure 已弃用
 	// userConn, err := grpc.Dial(fmt.Sprintf("%s:%d", ip, port), grpc.WithInsecure())
 
@@ -91,6 +92,11 @@ func GetUserList(ctx *gin.Context) {
 		zap.S().Errorw("[GetUserList] 连接 【用户服务器失败】",
 			"msg", err.Error())
 	}
+
+	// 验证登录的是哪一个用户
+	claims, _ := ctx.Get("claims")
+	currentUser := claims.(*models.CustomClaims)
+	zap.S().Infof("访问用户:%d", currentUser.ID)
 
 	// 生成grpc的client并调用接口
 	userSrvClient := proto.NewUserClient(userConn)
@@ -157,6 +163,14 @@ func PasswordLogin(c *gin.Context) {
 		return
 	}
 
+	// 验证码验证 , 每次验证完关闭掉
+	if !store.Verify(passwordLoginForm.CaptchaId, passwordLoginForm.Captcha, true) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"captcha": "验证码错误",
+		})
+		return
+	}
+
 	// 拨号连接用户grpc服务  这里的 Dial 和 WithInsecure 已弃用
 	// userConn, err := grpc.Dial(fmt.Sprintf("%s:%d", ip, port), grpc.WithInsecure())
 
@@ -217,14 +231,14 @@ func PasswordLogin(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, gin.H{
 						"msg": "生成token失败",
 					})
-					return 
+					return
 				}
 
 				c.JSON(http.StatusOK, gin.H{
-					"id": rsp.Id,
-					"nick_name": rsp.NickName,
-					"token": token,
-					"expired_at": (time.Now().Unix() + 60*60*24*30)*1000,
+					"id":         rsp.Id,
+					"nick_name":  rsp.NickName,
+					"token":      token,
+					"expired_at": (time.Now().Unix() + 60*60*24*30) * 1000,
 				})
 			} else {
 				c.JSON(http.StatusBadRequest, map[string]string{
