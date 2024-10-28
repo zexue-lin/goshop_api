@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	"goshop_api/user-web/forms"
 	"goshop_api/user-web/global"
 	"goshop_api/user-web/global/response"
@@ -247,4 +248,83 @@ func PasswordLogin(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// 用户注册 - 后续全部用c [ctx的简写]
+func Register(c *gin.Context) {
+	registerForm := forms.RegisterForm{}
+	// 表单验证
+	if err := c.ShouldBind(&registerForm); err != nil {
+		HandleValidatorError(c, err)
+		return
+	}
+
+	// 验证码校验 - 先从redis拿到对应手机号收到的验证码
+	rdb := redis.NewClient(&redis.Options{
+		Addr: fmt.Sprintf("%d:%s", global.ServerConfig.RedisInfo.Host, global.ServerConfig.RedisInfo.Port),
+	})
+
+	value, err := rdb.Get(context.Background(), "18787636723").Result()
+	if err == redis.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code": "验证码错误",
+		})
+		return
+	} else {
+		if value != registerForm.Code {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code": "验证码错误",
+			})
+			return
+		}
+	}
+
+	// 拨号连接用户grpc服务器
+	userConn, err := grpc.NewClient(fmt.Sprintf("%s:%d", global.ServerConfig.UserSrvInfo.Host,
+		global.ServerConfig.UserSrvInfo.Port), grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	if err != nil {
+		zap.S().Errorw("[GetUserList] 连接 【用户服务器失败】",
+			"msg", err.Error())
+	}
+
+	userSrvClient := proto.NewUserClient(userConn)
+	user, err := userSrvClient.CreateUser(context.Background(), &proto.CreateUserInfo{
+		NickName: registerForm.Mobile,
+		Password: registerForm.Password,
+		Mobile:   registerForm.Mobile,
+	})
+
+	if err != nil {
+		zap.S().Errorw("[Register] 注册【新建用户】失败:%s", err.Error())
+		HandleGrpcErrorToHttp(err, c)
+		return
+	}
+	// 注册后并登录
+	j := middlewares.NewJWT()
+	claims := models.CustomClaims{
+		ID:          uint(user.Id),
+		NickName:    user.NickName,
+		AuthorityId: uint(user.Role),
+		StandardClaims: jwt.StandardClaims{
+			NotBefore: time.Now().Unix(),               // 前面的生成时间
+			ExpiresAt: time.Now().Unix() + 60*60*24*30, //30天过期
+			Issuer:    "lattiex",                       // 签名机构
+		},
+	}
+
+	token, err := j.CreateToken(claims)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"msg": "生成token失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         user.Id,
+		"nick_name":  user.NickName,
+		"token":      token,
+		"expired_at": (time.Now().Unix() + 60*60*24*30) * 1000,
+	})
 }

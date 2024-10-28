@@ -7,3 +7,13 @@ user_srv:
 
 jwt:
   "key": "+tZb}$@$=Uhr-as]RQr,p${QYYgXcyBj"
+
+sms:
+  "key": ''
+  "secret": ''
+  "expired":'300'
+
+redis:
+  #  虚拟机地址
+  "host": '192.168.147.131'
+  "port": "6379"
